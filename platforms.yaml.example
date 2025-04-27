@@ -1,0 +1,57 @@
+# Git Platform Configuration for gat
+#
+# This file defines custom Git hosting platforms for use with gat.
+# Save as ~/.gat/platforms.yaml to register these platforms.
+#
+# Each platform entry should have the following fields:
+# - name: Display name (e.g., "GitHub Enterprise")
+# - defaultHost: Default hostname (e.g., "github.mycompany.com")
+# - sshPrefix: SSH prefix (e.g., "git@github.mycompany.com:")
+# - httpsPrefix: HTTPS prefix (e.g., "https://github.mycompany.com/")
+# - sshUser: SSH username (typically "git")
+# - tokenAuthScope: Token authentication scope (typically the same as defaultHost)
+
+# Gitea Example
+gitea:
+  name: "Gitea"
+  defaultHost: "git.example.com"
+  sshPrefix: "git@git.example.com:"
+  httpsPrefix: "https://git.example.com/"
+  sshUser: "git"
+  tokenAuthScope: "git.example.com"
+
+# GitHub Enterprise Example
+github-enterprise:
+  name: "GitHub Enterprise"
+  defaultHost: "github.mycompany.com"
+  sshPrefix: "git@github.mycompany.com:"
+  httpsPrefix: "https://github.mycompany.com/"
+  sshUser: "git"
+  tokenAuthScope: "github.mycompany.com"
+
+# Gitea with SSH on non-standard port
+gitea-custom-port:
+  name: "Gitea (Custom Port)"
+  defaultHost: "git.example.org"
+  sshPrefix: "ssh://git@git.example.org:2222/"
+  httpsPrefix: "https://git.example.org/"
+  sshUser: "git"
+  tokenAuthScope: "git.example.org"
+
+# Self-hosted GitLab
+company-gitlab:
+  name: "Company GitLab"
+  defaultHost: "gitlab.company.internal"
+  sshPrefix: "git@gitlab.company.internal:"
+  httpsPrefix: "https://gitlab.company.internal/"
+  sshUser: "git"
+  tokenAuthScope: "gitlab.company.internal"
+
+# Self-hosted BitBucket Server
+bitbucket-server:
+  name: "BitBucket Server"
+  defaultHost: "bitbucket.company.com"
+  sshPrefix: "git@bitbucket.company.com:"
+  httpsPrefix: "https://bitbucket.company.com/scm/"
+  sshUser: "git"
+  tokenAuthScope: "bitbucket.company.com" 
