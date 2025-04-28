@@ -5,6 +5,7 @@ $TestsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir = Split-Path -Parent $TestsDir
 $GatExe = Join-Path $RootDir "gat.exe"
 $TempDir = Join-Path $TestsDir "temp"
+$TestGitRepoPath = Join-Path $TempDir "test_repo"
 
 # Ensure temp directory exists
 if (-not (Test-Path $TempDir)) {
@@ -22,12 +23,23 @@ function Run-Gat {
     
     Write-Host "DEBUG: Running gat with args: $Arguments" -ForegroundColor DarkGray
     
+    # Check for GAT_CONFIG_FILE env var set by the runner
+    $testConfigFileEnv = $env:GAT_CONFIG_FILE
+    if ($testConfigFileEnv) {
+        Write-Host "DEBUG: Using config from ENV: $testConfigFileEnv" -ForegroundColor DarkGray
+    }
+    
     $processInfo = New-Object System.Diagnostics.ProcessStartInfo
     $processInfo.FileName = $GatExe
     $processInfo.RedirectStandardOutput = $true
     $processInfo.RedirectStandardError = $true
     $processInfo.UseShellExecute = $false
     $processInfo.Arguments = $Arguments
+
+    # Set environment variable for the gat process if the test runner set it
+    if ($testConfigFileEnv) {
+        $processInfo.EnvironmentVariables["GAT_CONFIG_FILE"] = $testConfigFileEnv
+    }
     
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $processInfo
@@ -97,21 +109,45 @@ function Create-TestProfile {
         
         [string]$Token = "test_token",
         
+        [string]$SSHIdentity = "",
+        
+        [string]$AuthMethod = "",
+        
         [switch]$SetupSSH,
         
         [switch]$Overwrite
     )
     
+    $effectiveAuthMethod = $AuthMethod
+    if (-not $effectiveAuthMethod) {
+        if ($SSHIdentity) {
+            $effectiveAuthMethod = "ssh"
+        } else {
+            $effectiveAuthMethod = "https"
+        }
+    }
+
     $args = @(
         "add", $Name,
         "--username", $Username,
         "--email", $Email,
         "--platform", $Platform,
-        "--token", $Token
+        "--auth-method", $effectiveAuthMethod
     )
     
-    if (-not $SetupSSH) {
+    # Only add --token if $Token is not empty
+    if (-not ([string]::IsNullOrEmpty($Token))) {
+        $args += "--token", $Token
+    }
+    
+    if ($SSHIdentity) {
+        $args += "--ssh-identity", $SSHIdentity
+    }
+    
+    if (-not $SetupSSH -and $SSHIdentity) {
         $args += "--setup-ssh=false"
+    } elseif ($SetupSSH -and $SSHIdentity) {
+        # Default is true, no need to add flag explicitly
     }
     
     if ($Overwrite) {
@@ -139,22 +175,10 @@ function Switch-TestProfile {
         [Parameter(Mandatory=$true)]
         [string]$Name,
         
-        [switch]$SSH,
-        
-        [switch]$HTTPS,
-        
         [switch]$DryRun
     )
     
     $args = @("switch", $Name)
-    
-    if ($SSH) {
-        $args += "--ssh"
-    }
-    
-    if ($HTTPS) {
-        $args += "--https"
-    }
     
     if ($DryRun) {
         $args += "--dry-run"
@@ -240,4 +264,45 @@ function Test-Report {
     }
     
     return $success
+}
+
+# Initialize a dummy Git repository for testing
+function Initialize-TestGitRepo {
+    # Remove existing repo if it exists
+    if (Test-Path $TestGitRepoPath) {
+        Remove-Item -Recurse -Force $TestGitRepoPath
+    }
+    
+    # Create directory and initialize git
+    New-Item -ItemType Directory -Path $TestGitRepoPath | Out-Null
+    Push-Location $TestGitRepoPath
+    try {
+        git init | Out-Null
+        # Configure dummy user/email for commit
+        git config user.name "Test User" | Out-Null
+        git config user.email "test@example.com" | Out-Null
+        # Create a dummy file and commit
+        New-Item -ItemType File -Path "README.md" -Value "Test repo for gat switch" | Out-Null
+        git add README.md | Out-Null
+        git commit -m "Initial commit" | Out-Null
+        # Add a dummy remote origin
+        git remote add origin https://github.com/test/test.git | Out-Null
+        Write-Host "DEBUG: Initialized test git repo at $TestGitRepoPath" -ForegroundColor DarkGray
+    } finally {
+        Pop-Location
+    }
+}
+
+# Get the remote origin URL from the test Git repository
+function Get-TestGitRemoteUrl {
+    if (-not (Test-Path $TestGitRepoPath)) {
+        throw "Test Git repo not found at $TestGitRepoPath"
+    }
+    Push-Location $TestGitRepoPath
+    try {
+        $result = git config --get remote.origin.url
+        return $result.Trim()
+    } finally {
+        Pop-Location
+    }
 } 

@@ -29,14 +29,10 @@ var validEmailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[
 
 // SetIdentity sets the user's Git identity in the global Git config
 func SetIdentity(username, email string) error {
-	// Validate inputs
-	if !validGitHubUsername.MatchString(username) {
-		return fmt.Errorf("❌ invalid GitHub username format: %s", username)
-	}
-
-	if !validEmailRegex.MatchString(email) {
-		return fmt.Errorf("❌ invalid email format: %s", email)
-	}
+	// Validation now happens primarily in config loading
+	// Basic check remains here for direct calls?
+	// if !validGitHubUsername.MatchString(username) { ... }
+	// if !validEmailRegex.MatchString(email) { ... }
 
 	// Set user.name
 	cmdName := exec.Command("git", "config", "--global", "user.name", username)
@@ -381,7 +377,51 @@ func isValidHTTPSHostFormat(hostPart string) bool {
 	return false
 }
 
+// RewriteRemote ensures the remote URL matches the profile's authentication method.
+// It converts the URL if necessary and updates the 'origin' remote.
+// Returns the final URL and any error encountered.
+func RewriteRemote(profile *config.Profile, profileName string) (string, error) {
+	// Validate the profile name
+	if err := config.ValidateProfileName(profileName); err != nil {
+		return "", err
+	}
+
+	// Get the current remote URL
+	currentURL, err := GetCurrentRemoteURL()
+	if err != nil {
+		// Not necessarily an error, could just be no remote configured
+		// If we return an error, the switch command might halt prematurely
+		fmt.Printf("ℹ️ Could not get current remote URL: %v\n", err)
+		return "", nil // Return empty URL and no error
+	}
+
+	var targetURL string
+	var targetProtocol string
+
+	// Determine the target URL based on the profile's auth method
+	if profile.AuthMethod == "ssh" {
+		targetURL = ConvertRemoteToSSH(currentURL, profile)
+		targetProtocol = "SSH"
+	} else { // AuthMethod == "https"
+		targetURL = ConvertRemoteToHTTPS(currentURL, profile)
+		targetProtocol = "HTTPS"
+	}
+
+	// If the URL needs changing, update the remote
+	if targetURL != currentURL {
+		fmt.Printf("🔗 Updating remote origin to use %s (%s)...\n", targetProtocol, targetURL)
+		if err := UpdateRemoteURL(targetURL); err != nil {
+			return currentURL, fmt.Errorf("failed to update remote URL: %w", err) // Return current URL on failure
+		}
+		return targetURL, nil // Return the new URL
+	}
+
+	fmt.Printf("🔗 Remote origin already uses correct protocol (%s)\n", targetProtocol)
+	return currentURL, nil // Return the existing URL
+}
+
 // UpdateRemoteProtocol switches the remote protocol between HTTPS and SSH
+// DEPRECATED: Use RewriteRemote instead for clearer logic based on profile AuthMethod.
 func UpdateRemoteProtocol(useSSH bool, profile *config.Profile, profileName string) error {
 	// Validate the profile name
 	if err := config.ValidateProfileName(profileName); err != nil {

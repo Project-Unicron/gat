@@ -15,24 +15,27 @@ func NewManager(configDir string) *Manager {
 
 // GetProfiles returns all profiles and the current profile name
 func (m *Manager) GetProfiles() (map[string]Profile, string, error) {
-	config, err := LoadConfig()
-	if err != nil {
-		return nil, "", err
+	// Load config, handle errors, ignore validation errors for now in Manager
+	validConfig, _, ioErr := LoadConfig()
+	if ioErr != nil {
+		return nil, "", ioErr
 	}
-	m.config = config
+	m.config = &validConfig // Assign address of validConfig
 
-	return config.Profiles, config.Current, nil
+	return validConfig.Profiles, validConfig.Current, nil
 }
 
 // GetCurrent returns the name of the current active profile
 func (m *Manager) GetCurrent() string {
 	if m.config == nil {
 		// Load config if not already loaded
-		config, err := LoadConfig()
-		if err != nil {
+		// Handle errors, ignore validation errors for now in Manager
+		validConfig, _, ioErr := LoadConfig()
+		if ioErr != nil {
+			// Cannot return error here, return empty string
 			return ""
 		}
-		m.config = config
+		m.config = &validConfig // Assign address of validConfig
 	}
 
 	return m.config.Current
@@ -42,17 +45,20 @@ func (m *Manager) GetCurrent() string {
 func (m *Manager) AddProfile(name string, profile Profile, overwrite bool) error {
 	if m.config == nil {
 		// Load config if not already loaded
-		config, err := LoadConfig()
-		if err != nil {
-			return err
+		// Handle errors, ignore validation errors for now in Manager
+		validConfig, _, ioErr := LoadConfig()
+		if ioErr != nil {
+			return ioErr
 		}
-		m.config = config
+		m.config = &validConfig // Assign address of validConfig
 	}
 
+	// Pass m.config (which is now *Config) directly
 	if err := AddProfile(m.config, name, profile, overwrite); err != nil {
 		return err
 	}
 
+	// Pass m.config (which is now *Config) directly
 	return SaveConfig(m.config)
 }
 
@@ -60,17 +66,20 @@ func (m *Manager) AddProfile(name string, profile Profile, overwrite bool) error
 func (m *Manager) SwitchToProfile(name string) error {
 	if m.config == nil {
 		// Load config if not already loaded
-		config, err := LoadConfig()
-		if err != nil {
-			return err
+		// Handle errors, ignore validation errors for now in Manager
+		validConfig, _, ioErr := LoadConfig()
+		if ioErr != nil {
+			return ioErr
 		}
-		m.config = config
+		m.config = &validConfig // Assign address of validConfig
 	}
 
+	// Pass m.config (which is now *Config) directly
 	if err := SwitchProfile(m.config, name); err != nil {
 		return err
 	}
 
+	// Pass m.config (which is now *Config) directly
 	return SaveConfig(m.config)
 }
 
@@ -78,16 +87,19 @@ func (m *Manager) SwitchToProfile(name string) error {
 func (m *Manager) RemoveProfile(name string, noBackup bool) error {
 	if m.config == nil {
 		// Load config if not already loaded
-		config, err := LoadConfig()
-		if err != nil {
-			return err
+		// Handle errors, ignore validation errors for now in Manager
+		validConfig, _, ioErr := LoadConfig()
+		if ioErr != nil {
+			return ioErr
 		}
-		m.config = config
+		m.config = &validConfig // Assign address of validConfig
 	}
 
+	// Pass m.config (which is now *Config) directly
 	if err := RemoveProfile(m.config, name, noBackup); err != nil {
 		return err
 	}
 
+	// Pass m.config (which is now *Config) directly
 	return SaveConfig(m.config)
 }

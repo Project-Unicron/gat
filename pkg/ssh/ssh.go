@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"gat/pkg/platform"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -299,4 +300,102 @@ func getGatConfigPath() (string, error) {
 
 	// Return path to gat_config file in .ssh directory
 	return filepath.Join(homeDir, ".ssh", "gat_config"), nil
+}
+
+// StartAgent ensures the ssh-agent is running.
+// Returns an error if it cannot start or connect to the agent.
+func StartAgent() error {
+	// Check if agent is already running by checking environment variable
+	if os.Getenv("SSH_AUTH_SOCK") != "" {
+		// Agent seems to be running, try listing keys to confirm connection
+		cmd := exec.Command("ssh-add", "-l")
+		if err := cmd.Run(); err == nil {
+			return nil // Agent is running and accessible
+		}
+	}
+
+	// Agent not running or not accessible, try starting it
+	fmt.Println("🔑 Starting ssh-agent...")
+	cmd := exec.Command("ssh-agent", "-s")
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("❌ failed to start ssh-agent: %w\nOutput: %s", err, string(output))
+	}
+
+	// Parse the output to set environment variables (SSH_AUTH_SOCK, SSH_AGENT_PID)
+	// Example output:
+	// SSH_AUTH_SOCK=/tmp/ssh-XXXXXXXXXX/agent.pid; export SSH_AUTH_SOCK;
+	// SSH_AGENT_PID=12345; export SSH_AGENT_PID;
+	// echo Agent pid 12345;
+	lines := strings.Split(string(output), ";")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "SSH_AUTH_SOCK=") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				os.Setenv("SSH_AUTH_SOCK", parts[1])
+			}
+		} else if strings.HasPrefix(line, "SSH_AGENT_PID=") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				os.Setenv("SSH_AGENT_PID", parts[1])
+			}
+		}
+	}
+
+	// Verify agent started by checking env var again
+	if os.Getenv("SSH_AUTH_SOCK") == "" {
+		return fmt.Errorf("❌ failed to parse ssh-agent output or set environment variables")
+	}
+
+	fmt.Println("✅ ssh-agent started")
+	return nil
+}
+
+// ClearIdentities removes all identities from the ssh-agent.
+func ClearIdentities() error {
+	fmt.Println("🧹 Clearing existing SSH identities from agent...")
+	cmd := exec.Command("ssh-add", "-D")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Check if the error is just "Agent has no identities"
+		if strings.Contains(string(output), "Agent has no identities") || strings.Contains(string(output), "Could not remove all identities") {
+			fmt.Println("ℹ️ No identities to clear or agent was empty.")
+			return nil // Not a fatal error
+		}
+		return fmt.Errorf("❌ failed to clear ssh-agent identities: %w\nOutput: %s", err, string(output))
+	}
+	fmt.Println("✅ Identities cleared")
+	return nil
+}
+
+// AddIdentity adds a specific SSH identity to the ssh-agent.
+func AddIdentity(identityPath string) error {
+	fmt.Printf("➕ Adding SSH identity: %s\n", identityPath)
+
+	// Expand ~ to home directory
+	if strings.HasPrefix(identityPath, "~") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("❌ could not find home directory: %w", err)
+		}
+		identityPath = filepath.Join(homeDir, identityPath[1:])
+	}
+
+	cmd := exec.Command("ssh-add", identityPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("❌ failed to add SSH identity '%s': %w\nOutput: %s", identityPath, err, string(output))
+	}
+
+	// Check output for success message (ssh-add output varies)
+	if !strings.Contains(string(output), "Identity added") {
+		// Some versions might just output nothing on success, check error code was 0
+		if exitErr, ok := err.(*exec.ExitError); ok && !exitErr.Success() {
+			return fmt.Errorf("❌ unknown error adding SSH identity '%s'\nOutput: %s", identityPath, string(output))
+		}
+	}
+
+	fmt.Printf("✅ Identity added: %s\n", identityPath)
+	return nil
 }

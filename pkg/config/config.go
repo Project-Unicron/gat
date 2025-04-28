@@ -14,7 +14,15 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/fatih/color"
 )
+
+// Validate GitHub username format - moved from pkg/git
+var ValidGitHubUsernameRegex = regexp.MustCompile(`^[a-zA-Z0-9]$|^[a-zA-Z0-9][a-zA-Z0-9]{0,37}$|^[a-zA-Z0-9][a-zA-Z0-9-]{0,37}[a-zA-Z0-9]$`)
+
+// Validate Git email format
+var ValidEmailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 // Profile represents a Git identity with its associated credentials
 type Profile struct {
@@ -24,6 +32,7 @@ type Profile struct {
 	SSHIdentity string `json:"ssh_identity,omitempty"`
 	Platform    string `json:"platform,omitempty"` // Platform ID (e.g., "github", "gitlab")
 	Host        string `json:"host,omitempty"`     // Custom hostname if different from platform default
+	AuthMethod  string `json:"auth_method"`        // Preferred authentication method ("ssh" or "https")
 
 	// Internal fields not serialized to JSON
 	rawToken string `json:"-"` // Raw, decrypted token for in-memory use
@@ -83,8 +92,21 @@ func ConfigPath() (string, error) {
 	return filepath.Join(homeDir, ".gat"), nil
 }
 
-// ConfigFilePath returns the path to the credentials file
+// ConfigFilePath returns the path to the credentials file.
+// It checks the GAT_CONFIG_FILE environment variable first.
 func ConfigFilePath() (string, error) {
+	// Check environment variable override
+	envPath := os.Getenv("GAT_CONFIG_FILE")
+	if envPath != "" {
+		// Ensure the directory exists if an override is used
+		envDir := filepath.Dir(envPath)
+		if err := os.MkdirAll(envDir, 0700); err != nil {
+			return "", fmt.Errorf("❌ could not create directory for GAT_CONFIG_FILE: %w", err)
+		}
+		return envPath, nil
+	}
+
+	// Default path
 	configDir, err := ConfigPath()
 	if err != nil {
 		return "", err
@@ -92,11 +114,19 @@ func ConfigFilePath() (string, error) {
 	return filepath.Join(configDir, "creds.json"), nil
 }
 
-// LoadConfig loads the configuration file from disk
-func LoadConfig() (*Config, error) {
+// LoadConfig loads the configuration file from disk, validates profiles,
+// and returns a Config containing only valid profiles, a map of validation
+// errors for invalid profiles, and any file I/O or parsing errors.
+func LoadConfig() (Config, map[string]error, error) {
 	configPath, err := ConfigFilePath()
 	if err != nil {
-		return nil, err
+		return Config{}, nil, err
+	}
+
+	// Initialize map for validation errors
+	validationErrors := make(map[string]error)
+	emptyValidConfig := Config{ // Used for early returns
+		Profiles: make(map[string]Profile),
 	}
 
 	// Check if the file exists
@@ -104,11 +134,11 @@ func LoadConfig() (*Config, error) {
 		// Create directory if it doesn't exist
 		configDir := filepath.Dir(configPath)
 		if err := os.MkdirAll(configDir, 0700); err != nil {
-			return nil, fmt.Errorf("❌ could not create config directory: %w", err)
+			return emptyValidConfig, nil, fmt.Errorf("❌ could not create config directory: %w", err)
 		}
 
 		// Create an empty config with default security settings
-		emptyConfig := &Config{
+		emptyConfig := Config{
 			Current:        "",
 			Profiles:       make(map[string]Profile),
 			StoreEncrypted: true,  // Default to encrypted storage
@@ -117,46 +147,121 @@ func LoadConfig() (*Config, error) {
 		}
 
 		// Save the empty config to disk
-		if err := SaveConfig(emptyConfig); err != nil {
-			return nil, fmt.Errorf("❌ could not create initial config file: %w", err)
+		if err := SaveConfig(&emptyConfig); err != nil {
+			return emptyValidConfig, nil, fmt.Errorf("❌ could not create initial config file: %w", err)
 		}
 
-		return emptyConfig, nil
+		// Return the newly created empty config (no profiles, no errors)
+		return emptyConfig, validationErrors, nil
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("❌ could not read config file: %w", err)
+		return emptyValidConfig, nil, fmt.Errorf("❌ could not read config file: %w", err)
 	}
 
-	var config Config
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("❌ could not parse config file: %w", err)
+	var loadedConfig Config // Holds the raw loaded config, possibly with invalid profiles
+	if err := json.Unmarshal(data, &loadedConfig); err != nil {
+		return emptyValidConfig, nil, fmt.Errorf("❌ could not parse config file: %w", err)
 	}
 
 	// If this is an old config file, initialize security settings
-	if config.Salt == "" {
-		config.Salt = GenerateSalt()
-		config.StoreEncrypted = true
+	if loadedConfig.Salt == "" {
+		loadedConfig.Salt = GenerateSalt()
+		loadedConfig.StoreEncrypted = true
+		// Note: SaveConfig will handle persistence of these on next save
 	}
 
 	// Attempt to decrypt any tokens if they're stored encrypted
-	if config.StoreEncrypted {
-		for name, profile := range config.Profiles {
+	if loadedConfig.StoreEncrypted {
+		for name, profile := range loadedConfig.Profiles {
 			if profile.Token != "" && strings.HasPrefix(profile.Token, "enc:") {
-				decryptedToken, err := DecryptToken(profile.Token, config.Salt)
+				decryptedToken, err := DecryptToken(profile.Token, loadedConfig.Salt)
 				if err == nil {
 					profile.rawToken = decryptedToken
-					config.Profiles[name] = profile
+					// Update profile in the original loaded map temporarily for validation
+					loadedConfig.Profiles[name] = profile
+				} else {
+					// Keep encrypted token, but log a warning? Or add to validation errors?
+					// For now, let's add a general decryption error, maybe not profile specific yet
+					// Or perhaps mark the profile as invalid due to decryption failure?
+					// Let's add it to validation errors for the specific profile.
+					validationErrors[name] = fmt.Errorf("failed to decrypt token: %w", err)
+					// No need to continue, validation loop later will skip this profile
 				}
 			}
 		}
 	}
 
 	// Check and fix permissions
-	EnsureSecurePermissions(configPath)
+	EnsureSecurePermissions(configPath) // Best effort
 
-	return &config, nil
+	// Prepare the config that will hold only valid profiles
+	validConfig := Config{
+		Current:        loadedConfig.Current,
+		Profiles:       make(map[string]Profile),
+		StoreEncrypted: loadedConfig.StoreEncrypted,
+		NoStoreTokens:  loadedConfig.NoStoreTokens,
+		Salt:           loadedConfig.Salt,
+	}
+
+	// Validate profiles after loading
+profileLoop:
+	for name, profile := range loadedConfig.Profiles {
+		// If decryption failed earlier, this profile is already marked invalid.
+		if _, exists := validationErrors[name]; exists {
+			continue profileLoop
+		}
+
+		// Validate Username
+		if !ValidGitHubUsernameRegex.MatchString(profile.Username) {
+			validationErrors[name] = fmt.Errorf("❌ invalid username format: '%s'", profile.Username)
+			continue profileLoop
+		}
+
+		// Validate Email
+		if !ValidEmailRegex.MatchString(profile.Email) {
+			// Warn instead of error for email, as Git itself allows weird emails sometimes
+			fmt.Printf(color.YellowString("⚠️ Warning: Profile [%s] has potentially invalid email format: %s\n"), name, profile.Email)
+		}
+
+		// Validate AuthMethod
+		if profile.AuthMethod == "" {
+			validationErrors[name] = fmt.Errorf("❌ missing required field 'auth_method'. Please reconfigure profile")
+			continue profileLoop
+		}
+		profile.AuthMethod = strings.ToLower(profile.AuthMethod) // Normalize
+		if profile.AuthMethod != "ssh" && profile.AuthMethod != "https" {
+			validationErrors[name] = fmt.Errorf("❌ invalid auth_method: '%s'. Must be 'ssh' or 'https'", profile.AuthMethod)
+			continue profileLoop
+		}
+
+		// Normalize Platform (handle legacy empty platform)
+		if profile.Platform == "" {
+			profile.Platform = "github" // Default for backwards compatibility
+		}
+		profile.Platform = strings.ToLower(profile.Platform)
+
+		// If all checks passed, add the profile (with potentially updated fields) to the valid map
+		validConfig.Profiles[name] = profile
+	}
+
+	// Ensure Current profile is actually valid, if not, unset it.
+	if _, exists := validConfig.Profiles[validConfig.Current]; !exists && validConfig.Current != "" {
+		// If the current profile is listed but failed validation
+		if _, invalid := validationErrors[validConfig.Current]; invalid {
+			fmt.Printf(color.YellowString("⚠️ Warning: Current profile [%s] is invalid, unsetting active profile.\n"), validConfig.Current)
+			validConfig.Current = ""
+			// Optionally, save the config here to persist the unset current profile? Or let next command handle it.
+		} else {
+			// This case shouldn't happen if logic is correct (current not in valid map and not in error map)
+			// Maybe it was deleted manually?
+			fmt.Printf(color.YellowString("⚠️ Warning: Current profile [%s] not found, unsetting active profile.\n"), validConfig.Current)
+			validConfig.Current = ""
+		}
+	}
+
+	return validConfig, validationErrors, nil
 }
 
 // SaveConfig saves the configuration to disk
@@ -242,26 +347,42 @@ func GetCurrentProfile(config *Config) (*Profile, string, error) {
 }
 
 // AddProfile adds a new profile to the configuration
+// Note: Assumes config passed in contains only valid profiles (as returned by LoadConfig)
 func AddProfile(config *Config, name string, profile Profile, overwrite bool) error {
-	// Validate name (security)
 	if err := ValidateProfileName(name); err != nil {
 		return err
 	}
 
 	if _, exists := config.Profiles[name]; exists && !overwrite {
-		return fmt.Errorf("❌ profile '%s' already exists, use --overwrite to replace", name)
+		return fmt.Errorf("❌ profile [%s] already exists. Use --overwrite to replace it", name)
 	}
 
-	// If we're using encryption, set up the token properly
-	if config.StoreEncrypted && profile.Token != "" {
-		profile.SetToken(profile.Token, true, config.Salt)
+	// Basic validation before adding (more thorough validation happens on load)
+	if !ValidGitHubUsernameRegex.MatchString(profile.Username) {
+		return fmt.Errorf("❌ invalid username format: '%s'", profile.Username)
 	}
+	if !ValidEmailRegex.MatchString(profile.Email) {
+		// Allow potentially invalid emails but warn
+		fmt.Printf(color.YellowString("⚠️ Warning: Profile [%s] has potentially invalid email format: %s\n"), name, profile.Email)
+	}
+	if profile.AuthMethod == "" {
+		return fmt.Errorf("❌ 'auth_method' is required")
+	}
+	profile.AuthMethod = strings.ToLower(profile.AuthMethod)
+	if profile.AuthMethod != "ssh" && profile.AuthMethod != "https" {
+		return fmt.Errorf("❌ invalid 'auth_method': '%s'. Must be 'ssh' or 'https'", profile.AuthMethod)
+	}
+	if profile.Platform == "" {
+		profile.Platform = "github"
+	}
+	profile.Platform = strings.ToLower(profile.Platform)
 
 	config.Profiles[name] = profile
 	return nil
 }
 
 // RemoveProfile removes a profile from the configuration
+// Note: Assumes config passed in contains only valid profiles (as returned by LoadConfig)
 func RemoveProfile(config *Config, name string, noBackup bool) error {
 	if _, exists := config.Profiles[name]; !exists {
 		return fmt.Errorf("❌ profile '%s' does not exist", name)
@@ -323,17 +444,19 @@ func BackupProfile(config *Config, name string) error {
 	return nil
 }
 
-// SwitchProfile sets the current profile
+// SwitchProfile sets the current active profile
+// Note: Assumes config passed in contains only valid profiles (as returned by LoadConfig)
 func SwitchProfile(config *Config, name string) error {
 	if _, exists := config.Profiles[name]; !exists {
-		return fmt.Errorf("❌ profile '%s' does not exist", name)
+		return fmt.Errorf("❌ profile [%s] not found", name)
 	}
 
 	config.Current = name
 	return nil
 }
 
-// ValidateProfileName ensures profile names don't contain characters that might be used for injection
+// ValidateProfileName checks if a profile name is valid
+// (Basic check, more comprehensive validation can be added if needed)
 func ValidateProfileName(name string) error {
 	// Check for empty name
 	if name == "" {

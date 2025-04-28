@@ -28,15 +28,34 @@ var removeCmd = &cobra.Command{
 			return fmt.Errorf("❌ %v", err)
 		}
 
-		// Load configuration
-		cfg, err := config.LoadConfig()
-		if err != nil {
-			return err
+		// Load configuration, print warnings for invalid profiles but proceed
+		validConfig, validationErrors, ioErr := config.LoadConfig()
+		if ioErr != nil {
+			return ioErr // Handle file I/O or parsing errors first
+		}
+		if len(validationErrors) > 0 {
+			// Check if the target profile itself failed validation
+			if _, isInvalid := validationErrors[profileName]; isInvalid {
+				return fmt.Errorf("❌ cannot remove profile '%s' because it failed validation: %v", profileName, validationErrors[profileName])
+			}
+			// Otherwise, warn about other invalid profiles
+			fmt.Println(color.YellowString("\n⚠️ Found configuration issues with other profiles (will be ignored):"))
+			for name, err := range validationErrors {
+				if name != profileName { // Don't repeat the error for the target profile if it was valid
+					fmt.Printf(color.YellowString("   - Profile [%s]: %v\n"), name, err)
+				}
+			}
+			fmt.Println() // Add a newline for separation
 		}
 
-		// Check if profile exists
-		if _, exists := cfg.Profiles[profileName]; !exists {
-			return fmt.Errorf("❌ profile '%s' does not exist", profileName)
+		// Check if profile exists in the set of valid profiles
+		if _, exists := validConfig.Profiles[profileName]; !exists {
+			// If it didn't exist in validationErrors either, it's truly not found
+			if _, wasInvalid := validationErrors[profileName]; !wasInvalid {
+				return fmt.Errorf("❌ profile '%s' does not exist", profileName)
+			} // If it *was* invalid, the error was already returned above.
+			// This path shouldn't normally be reached due to the check above, but covers edge cases.
+			return fmt.Errorf("❌ profile '%s' not found (it may have failed validation)", profileName)
 		}
 
 		// Confirm deletion unless force flag is set
@@ -61,12 +80,12 @@ var removeCmd = &cobra.Command{
 		}
 
 		// Remove profile
-		if err := config.RemoveProfile(cfg, profileName, noBackup); err != nil {
+		if err := config.RemoveProfile(&validConfig, profileName, noBackup); err != nil {
 			return err
 		}
 
 		// Save configuration
-		if err := config.SaveConfig(cfg); err != nil {
+		if err := config.SaveConfig(&validConfig); err != nil {
 			return err
 		}
 

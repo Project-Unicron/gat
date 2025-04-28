@@ -27,38 +27,31 @@ var statusCmd = &cobra.Command{
 			fmt.Printf("✅ Created configuration directory at %s\n\n", configPath)
 		}
 
-		// Ensure config file exists
-		configFilePath, err := config.ConfigFilePath()
-		if err != nil {
-			return err
+		// Load configuration, print warnings for invalid profiles but proceed
+		validConfig, validationErrors, ioErr := config.LoadConfig()
+		if ioErr != nil {
+			return ioErr // Handle file I/O or parsing errors first
 		}
-		if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
-			emptyConfig := &config.Config{
-				Current:  "",
-				Profiles: make(map[string]config.Profile),
+		if len(validationErrors) > 0 {
+			fmt.Println(color.YellowString("\n⚠️ Found configuration issues with some profiles:"))
+			for name, err := range validationErrors {
+				fmt.Printf(color.YellowString("   - Profile [%s]: %v\n"), name, err)
 			}
-			if err := config.SaveConfig(emptyConfig); err != nil {
-				return fmt.Errorf("❌ could not create initial config file: %w", err)
-			}
-			fmt.Printf("✅ Created empty configuration file at %s\n\n", configFilePath)
+			fmt.Println() // Add a newline for separation
 		}
 
-		// Load configuration
-		cfg, err := config.LoadConfig()
+		// Get current profile based on the valid configuration
+		// Pass address of validConfig as GetCurrentProfile expects a pointer
+		profile, profileName, err := config.GetCurrentProfile(&validConfig)
 		if err != nil {
-			return err
-		}
-
-		// Get current profile
-		profile, profileName, err := config.GetCurrentProfile(cfg)
-		if err != nil {
-			fmt.Println("⚠️ No active profile.")
-			fmt.Println("👉 Use 'gat switch <name>' to activate a profile.")
+			// This handles both "Current" being empty and "Current" pointing to an invalid profile
+			fmt.Println("⚠️ No active profile set or the active profile is invalid.")
+			fmt.Println("👉 Use 'gat switch <name>' to activate a valid profile.")
 			return nil
 		}
 
 		// Print profile information
-		fmt.Println("🔍 Current Profile:")
+		fmt.Println("�� Current Profile:")
 		fmt.Printf("   Name: %s\n", color.GreenString(profileName))
 		fmt.Printf("   👤 Username: %s\n", profile.Username)
 		fmt.Printf("   📧 Email: %s\n", profile.Email)

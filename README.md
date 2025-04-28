@@ -259,6 +259,8 @@ Profiles are stored in `~/.gat/creds.json` with the following structure:
 }
 ```
 
+**Note:** If the `creds.json` file contains profiles with missing or invalid fields (e.g., incorrect email format, invalid auth method), `gat` will attempt to load all *valid* profiles and report warnings for the invalid ones. This allows you to continue using your valid profiles even if some configurations are broken.
+
 ### Platform Configuration
 
 You can define custom platforms in `~/.gat/platforms.yaml`:
