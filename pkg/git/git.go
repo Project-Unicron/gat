@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/fatih/color"
 )
 
 // Validate GitHub username format - without using unsupported look-ahead assertions
@@ -193,7 +195,7 @@ func ConvertRemoteToHTTPS(url string, profile *config.Profile) string {
 }
 
 // ConvertRemoteToSSH converts a remote URL to SSH format
-func ConvertRemoteToSSH(url string, profile *config.Profile) string {
+func ConvertRemoteToSSH(url string, profile *config.Profile, profileName string) string {
 	platformID := profile.GetPlatform()
 
 	// Get platform information
@@ -225,11 +227,11 @@ func ConvertRemoteToSSH(url string, profile *config.Profile) string {
 	if IsSSHRemote(url) {
 		// Already an SSH URL, check if it needs to be converted to profile format
 		isProfileSSH, currentPlatformID, currentProfile := IsProfileSSHRemote(url)
-		if isProfileSSH && (currentPlatformID != platformID || currentProfile != sshUser) {
+		if isProfileSSH && (currentPlatformID != platformID || currentProfile != profileName) {
 			// Need to update the profile in the URL
 			parts := strings.Split(url, ":")
 			if len(parts) == 2 {
-				hostAlias := platform.GetProfileSSHHost(platformID, sshUser)
+				hostAlias := platform.GetProfileSSHHost(platformID, profileName)
 				return fmt.Sprintf("git@%s:%s", hostAlias, parts[1])
 			}
 		} else if !isProfileSSH {
@@ -237,7 +239,7 @@ func ConvertRemoteToSSH(url string, profile *config.Profile) string {
 			_, path, err := platform.GetHostAndPath(url)
 			if err == nil {
 				// Convert standard SSH URL to profile-specific format for this platform
-				hostAlias := platform.GetProfileSSHHost(platformID, sshUser)
+				hostAlias := platform.GetProfileSSHHost(platformID, profileName)
 				return fmt.Sprintf("git@%s:%s", hostAlias, path)
 			}
 		}
@@ -251,7 +253,7 @@ func ConvertRemoteToSSH(url string, profile *config.Profile) string {
 		}
 
 		// Use the host alias for this platform+profile combination
-		hostAlias := platform.GetProfileSSHHost(platformID, sshUser)
+		hostAlias := platform.GetProfileSSHHost(platformID, profileName)
 		path := parts[1]
 
 		// Return the SSH URL with the host alias
@@ -400,8 +402,26 @@ func RewriteRemote(profile *config.Profile, profileName string) (string, error) 
 
 	// Determine the target URL based on the profile's auth method
 	if profile.AuthMethod == "ssh" {
-		targetURL = ConvertRemoteToSSH(currentURL, profile)
+		targetURL = ConvertRemoteToSSH(currentURL, profile, profileName)
 		targetProtocol = "SSH"
+
+		// Check if SSH Host Alias Exists
+		if isProfileSSH, _, _ := IsProfileSSHRemote(targetURL); isProfileSSH {
+			// Extract the host alias part (e.g., github-profilename)
+			hostAlias := platform.GetProfileSSHHost(profile.GetPlatform(), profileName)
+
+			// Check if the alias exists in SSH config
+			hostExists, checkErr := ssh.CheckSSHHostExists(hostAlias)
+			if checkErr != nil {
+				// Print a warning if we couldn't check, but don't halt the process
+				fmt.Printf(color.YellowString("  ⚠️ Could not verify SSH host alias '%s' in config: %v\n"), hostAlias, checkErr)
+			} else if !hostExists {
+				// Print a warning if the host alias is definitely missing
+				fmt.Printf(color.RedString("  ❗ SSH host alias '%s' not found in your SSH configuration (~/.ssh/config or ~/.ssh/gat_config).\n"), hostAlias)
+				fmt.Println(color.RedString("     Git operations using SSH may fail. Ensure the alias is configured."))
+				// Consider adding instructions on how to fix (e.g., re-run gat switch, check gat doctor, or manually edit)
+			}
+		}
 	} else { // AuthMethod == "https"
 		targetURL = ConvertRemoteToHTTPS(currentURL, profile)
 		targetProtocol = "HTTPS"
@@ -435,7 +455,7 @@ func UpdateRemoteProtocol(useSSH bool, profile *config.Profile, profileName stri
 
 	var newURL string
 	if useSSH {
-		newURL = ConvertRemoteToSSH(url, profile)
+		newURL = ConvertRemoteToSSH(url, profile, profileName)
 	} else {
 		newURL = ConvertRemoteToHTTPS(url, profile)
 	}

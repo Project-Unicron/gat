@@ -1,0 +1,36 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when run with the
+# -o option to specify output file other than coverage.out
+*.out
+
+# Project-specific build output
+gat.exe
+
+# Dependency directories (remove if you use vendoring)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Test artifacts
+tests/temp/
+
+# IDE/Editor files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
+.DS_Store
+Thumbs.db 

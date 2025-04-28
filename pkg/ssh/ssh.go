@@ -234,6 +234,40 @@ func CheckSSHIdentity(sshIdentity string) (bool, error) {
 	return true, nil
 }
 
+// CheckSSHHostExists checks if a specific SSH host alias exists in the main or gat SSH config files.
+func CheckSSHHostExists(hostAlias string) (bool, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false, fmt.Errorf("❌ could not find home directory: %w", err)
+	}
+
+	mainConfigPath := filepath.Join(homeDir, ".ssh", "config")
+	gatConfigPath := filepath.Join(homeDir, ".ssh", "gat_config")
+
+	configContent := ""
+
+	// Read main config if it exists
+	if data, err := os.ReadFile(mainConfigPath); err == nil {
+		configContent += string(data) + "\n"
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("❌ could not read SSH config '%s': %w", mainConfigPath, err)
+	}
+
+	// Read gat_config if it exists
+	if data, err := os.ReadFile(gatConfigPath); err == nil {
+		configContent += string(data)
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("❌ could not read gat SSH config '%s': %w", gatConfigPath, err)
+	}
+
+	// Check if the host alias exists in the combined content
+	// We look for a line starting with "Host" followed by the exact alias and whitespace/end-of-line.
+	// This is a simplified check; a full SSH config parser would be more robust but complex.
+	hostPattern := regexp.MustCompile(fmt.Sprintf(`(?m)^\s*Host\s+%s\s*$`, regexp.QuoteMeta(hostAlias)))
+
+	return hostPattern.MatchString(configContent), nil
+}
+
 // CheckSSHSetup checks if the SSH configuration is set up correctly for gat
 func CheckSSHSetup() (bool, error) {
 	// Get user's home directory
